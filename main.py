@@ -23,7 +23,7 @@ class RenderHealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"📡 NWS Weather Alert Monitor is running smoothly on Render free tier.")
+        self.wfile.write(b"NWS Weather Alert Monitor is running smoothly on Render free tier.")
 
     def log_message(self, format, *args):
         # Silence standard HTTP request logging to keep the dashboard log clean
