@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import aiohttp
+from aiohttp import web  # Added to satisfy Render's port binding health check
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from src.engine import WeatherStreamEngine
@@ -22,14 +23,10 @@ def parse_nws_time(iso_str):
     if not iso_str:
         return "N/A"
     try:
-        # fromisoformat handles offsets natively
         dt = datetime.fromisoformat(iso_str)
-        
-        # Convert explicitly to Eastern Time Zone (handles EST/EDT transitions dynamically)
         eastern_tz = ZoneInfo("America/New_York")
         dt_eastern = dt.astimezone(eastern_tz)
         
-        # Format string, then split to strip out leading zeros manually
         formatted_time = dt_eastern.strftime("%m/%d/%Y %I:%M%p")
         parts = formatted_time.split(" ")
         date_part = "/".join([str(int(x)) for x in parts[0].split("/")])
@@ -56,10 +53,10 @@ def generate_iem_link(alert):
         vtec_string = vtec_list[0]
         parts = vtec_string.split('.')
         
-        wfo = parts[2]          # e.g., KCLE
-        phenomena = parts[3]    # e.g., XH
-        significance = parts[4] # e.g., W
-        event_id = int(parts[5]) # Strips leading zeros (e.g., 0001 -> 1)
+        wfo = parts[2]          
+        phenomena = parts[3]    
+        significance = parts[4] 
+        event_id = int(parts[5]) 
         
         sent_time = properties.get("sent", "")
         year = sent_time.split("-")[0] if sent_time else "2026"
@@ -84,11 +81,9 @@ def generate_iem_image_link(alert):
         vtec_string = vtec_list[0]
         parts = vtec_string.split('.')
         
-        wfo = parts[2]          # e.g., KCLE
-        phenomena = parts[3]    # e.g., XH
-        significance = parts[4] # e.g., W
-        
-        # Keep leading zeros by padding the integer back to 4 digits (e.g., 1 -> 0001)
+        wfo = parts[2]          
+        phenomena = parts[3]    
+        significance = parts[4] 
         event_id_padded = f"{int(parts[5]):04d}"
         
         sent_time = properties.get("sent", "")
@@ -119,15 +114,11 @@ def generate_iem_text_link(alert):
         return fallback_link
         
     try:
-        # 1. Extract AWIPS ID (e.g., "NPWPBZ")
         awips_id = awips_list[0].strip()
-        
-        # 2. Extract day/time digits from WMO (e.g., "WWUS71 KPBZ 301637" -> "301637")
         wmo_string = wmo_list[0].strip()
         wmo_parts = wmo_string.split()
         time_digits = wmo_parts[-1]
         
-        # 3. Pull Year & Month dynamically from 'sent' transformed cleanly to UTC
         sent_raw = properties.get("sent", "")
         if sent_raw:
             dt_utc = datetime.fromisoformat(sent_raw).astimezone(timezone.utc)
@@ -144,7 +135,6 @@ def get_vtec_action_data(alert):
     """
     Extracts the 3-letter action code from the VTEC string and maps it
     to human-readable alert lifecycle text and its corresponding literal Unicode emoji.
-    Returns (action_text, emoji_string) or ("", "") if not found.
     """
     vtec_actions = {
         "NEW": ("New event", "🆕"),
@@ -168,7 +158,7 @@ def get_vtec_action_data(alert):
     try:
         vtec_string = vtec_list[0]
         parts = vtec_string.split('.')
-        action_code = parts[1].upper() # Grabs the item right after the first period
+        action_code = parts[1].upper() 
         return vtec_actions.get(action_code, ("", ""))
     except Exception:
         return "", ""
@@ -180,26 +170,20 @@ def format_slack_block_kit(alert, location_name):
     properties = alert.get("properties", {})
     alert_name = properties.get("event", "Unknown Alert")
     
-    # Generate dynamic links using utility logic
     alert_link = generate_iem_link(alert)
     alert_image_link = generate_iem_image_link(alert)
     alert_link_text = generate_iem_text_link(alert)
     
-    # Parse timestamps using the correct 'onset' field for start time
     onset_raw = properties.get("onset")
     ends_raw = properties.get("ends") or properties.get("expires")
     
     effective_time = parse_nws_time(onset_raw)  
     ends_time = parse_nws_time(ends_raw)
     
-    # Generate current UTC epoch timestamp cleanly
     unix_time = int(datetime.now(timezone.utc).timestamp())
-    
-    # Fetch the dynamic VTEC lifestyle string and literal emoji
     action_prefix, action_emoji = get_vtec_action_data(alert)
     
     if action_prefix:
-        # Added a clean newline layout split (\n) to drop the warning info to the second row
         alert_body = f"{action_prefix}\n{alert_name} from {effective_time} to {ends_time} for {location_name}"
         push_title = f"{action_emoji} {alert_name.upper()} for {location_name.upper()} from {effective_time} to {ends_time}"
         header_text = f"{action_emoji} {alert_name.upper()} for\n{location_name.upper()}"
@@ -208,13 +192,11 @@ def format_slack_block_kit(alert, location_name):
         push_title = f"{alert_name.upper()} for {location_name.upper()} from {effective_time} to {ends_time}"
         header_text = f"{alert_name.upper()} for\n{location_name.upper()}"
     
-    # Set fallback top-level channel icon string variables
     if "Tornado" in alert_name or "Severe Thunderstorm" in alert_name:
         icon_emoji = "🚨"
     else:
         icon_emoji = "⚠️"
         
-    # Build core blocks layout matrix
     blocks = [
         {
             "type": "header",
@@ -233,7 +215,6 @@ def format_slack_block_kit(alert, location_name):
         }
     ]
     
-    # Safely inject the image block ONLY if an active VTEC block exists
     if alert_image_link:
         blocks.append({
             "type": "image",
@@ -241,7 +222,6 @@ def format_slack_block_kit(alert, location_name):
             "alt_text": "Storm Based Warning Map"
         })
         
-    # Complete rest of layout block assignment tracking with side-by-side action buttons
     blocks.extend([
         {
             "type": "actions",
@@ -310,12 +290,14 @@ async def send_slack_alert(alert, location_name):
     except Exception as e:
         print(f"❌ Error dispatching asynchronous event webhook: {e}")
 
+# --- NEW: Added dummy health check handler for Render ---
+async def handle_health_check(request):
+    return web.Response(text="NWS Weather Alert Monitor is running smoothly on Render free tier.")
+
 async def main():
     print("🚀 Initializing cloud environment structures...")
     
-    # Path to your custom local JSON file relative to your project root
     config_path = os.path.join("config", "locations.json")
-    
     try:
         with open(config_path, "r") as f:
             places_to_monitor = json.load(f)
@@ -331,8 +313,28 @@ async def main():
         print("⚠️ Monitoring matrix is completely empty. Stream engine aborted.")
         return
 
+    # --- UPDATED: Launch the weather engine as a concurrent background task ---
     engine = WeatherStreamEngine(places_to_monitor)
-    await engine.start_loop(send_slack_alert)
+    asyncio.create_task(engine.start_loop(send_slack_alert))
+    print("🔄 Weather engine started in background event loop.")
+
+    # --- NEW: Set up and bind the lightweight web server to satisfy Render ---
+    app = web.Application()
+    app.router.add_get('/', handle_health_check)
+    
+    # Render maps its dynamic port assignment to 'PORT'. Fall back to 8080 locally.
+    port = int(os.environ.get("PORT", 8080))
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    
+    print(f"📡 Binding server to port {port} for Render health checks...")
+    await site.start()
+    
+    # Keep the master loop alive indefinitely
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
