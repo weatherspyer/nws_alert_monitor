@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import asyncio
 import threading
 import aiohttp
@@ -68,7 +69,7 @@ async def send_slack_alert(alert, location_name):
                 "text": f"*{headline}*\n\n{description[:1200]}...",  # Safe boundary split
                 "fields": [
                     {"title": "Severity", "value": severity, "short": True},
-                    {"title": "Data Source", "value": "National Weather Service API", "short": True}
+                    {"title": "Monitored Region", "value": location_name, "short": True}
                 ]
             }
         ]
@@ -99,15 +100,22 @@ if __name__ == "__main__":
     web_thread = threading.Thread(target=start_health_check_server, daemon=True)
     web_thread.start()
 
-    print("✅ Web port listener isolated. Initializing geolocation targets...")
+    print("✅ Web port listener isolated. Loading geolocation targets from JSON...")
 
-    # Define target regions for radar polling
-    my_locations = {
-        "Pittsburgh Region": {"lat": 40.4406, "lon": -79.9959},
-        "Cleveland Region": {"lat": 41.4993, "lon": -81.6944}
-    }
+    # Load locations from locations.json dynamically
+    try:
+        with open("locations.json", "r") as f:
+            my_locations = json.load(f)
+        print(f"✅ Successfully loaded target keys from JSON: {list(my_locations.keys())}")
+    except Exception as e:
+        print(f"⚠️ Failed to load locations.json ({e}). Falling back to hardcoded defaults.")
+        # Backup regional defaults if the JSON file is missing or formatted incorrectly
+        my_locations = {
+            "Pittsburgh Region": {"lat": 40.4406, "lon": -79.9959},
+            "Cleveland Region": {"lat": 41.4993, "lon": -81.6944}
+        }
 
-    # Instantiate our engine object
+    # Instantiate our engine object with the dynamic coordinates
     engine = WeatherStreamEngine(monitored_places=my_locations)
 
     print("🛰️ Systems online. Invoking core asynchronous tracking runtime...")
