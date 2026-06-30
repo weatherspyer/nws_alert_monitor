@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # Load locations from locations.json dynamically
     try:
-        with open("locations.json", "r") as f:
+        with open("config/locations.json", "r") as f:
             my_locations = json.load(f)
         print(f"✅ Successfully loaded target keys from JSON: {list(my_locations.keys())}")
     except Exception as e:
