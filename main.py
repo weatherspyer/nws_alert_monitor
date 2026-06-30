@@ -4,21 +4,17 @@ import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Import your core engineering logic from the src directory
+# Import your WeatherStreamEngine class from the src directory
 try:
-    from src.engine import run_monitoring_loop
+    from src.engine import WeatherStreamEngine
 except ImportError as e:
-    print(f"❌ Critical Error: Could not import monitoring loop from 'src/engine'. Ensure your 'src' folder contains 'engine.py'. Details: {e}")
+    print(f"❌ Critical Error: Could not import WeatherStreamEngine from 'src/engine'. Details: {e}")
     sys.exit(1)
 
 # ==========================================
 # 1. LIGHTWEIGHT WEB SERVER FOR RENDER FREE TIER
 # ==========================================
 class RenderHealthCheckHandler(BaseHTTPRequestHandler):
-    """
-    Responds to Render's internal port scans and health checks
-    to prevent 'Port scan timeout' deployment failures.
-    """
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
@@ -26,16 +22,11 @@ class RenderHealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"NWS Weather Alert Monitor is running smoothly on Render free tier.")
 
     def log_message(self, format, *args):
-        # Silence standard HTTP request logging to keep the dashboard log clean
         return
 
 def start_health_check_server():
-    """
-    Binds to the port provided by Render's environment, defaulting to 10000.
-    """
     port = int(os.environ.get("PORT", 10000))
     server_address = ("0.0.0.0", port)
-    
     try:
         httpd = HTTPServer(server_address, RenderHealthCheckHandler)
         print(f"🌍 Internal health check server listening on port {port}...")
@@ -44,28 +35,47 @@ def start_health_check_server():
         print(f"⚠️ Port binder warning: {e}")
 
 # ==========================================
-# 2. MAIN EXECUTION ENTRYPOINT
+# 2. DUMMY CALLBACK FUNCTION (FOR TESTING)
+# ==========================================
+async def placeholder_callback(alert, location_name):
+    """
+    This replaces your slack dispatch function temporarily so the engine 
+    has somewhere to send alerts when it finds them.
+    """
+    event = alert["properties"].get("event", "Unknown Alert")
+    print(f"🚨 NEW ALERT FOUND FOR {location_name}: {event}")
+
+# ==========================================
+# 3. MAIN EXECUTION ENTRYPOINT
 # ==========================================
 if __name__ == "__main__":
     print("🚀 Initializing NWS Weather Monitoring Engine setup...")
 
-    # Validate that the necessary environment variable is injected before booting
     if not os.getenv("SLACK_WEBHOOK_URL"):
-        print("❌ Critical Deployment Error: SLACK_WEBHOOK_URL is missing from environment variables!")
-        print("Please inject it securely in your Render dashboard under the 'Environment' tab.")
+        print("❌ Critical Deployment Error: SLACK_WEBHOOK_URL is missing!")
         sys.exit(1)
 
-    # Launch the health check server inside a separate background thread.
-    # This immediately satisfies Render's port checks while leaving the main
-    # thread open for your infinite async polling workflow.
+    # Launch the health check server inside a separate background thread
     web_thread = threading.Thread(target=start_health_check_server, daemon=True)
     web_thread.start()
 
-    print("✅ Port binder active. Starting main asynchronous alerting loop...")
+    print("✅ Port binder active. Defining monitored locations...")
 
-    # Run your engine loop continuously inside the main asyncio context
+    # Define the coordinates you want to pass into your engine
+    # (Feel free to adjust these coordinates or add more locations here)
+    my_locations = {
+        "Pittsburgh Region": {"lat": 40.4406, "lon": -79.9959},
+        "Cleveland Region": {"lat": 41.4993, "lon": -81.6944}
+    }
+
+    # Initialize your stream engine class
+    engine = WeatherStreamEngine(monitored_places=my_locations)
+
+    print("🛰️ Engine initialized. Starting main asynchronous alerting loop...")
+
+    # Run your engine's start_loop continuously inside asyncio
     try:
-        asyncio.run(run_monitoring_loop())
+        asyncio.run(engine.start_loop(placeholder_callback))
     except KeyboardInterrupt:
         print("\n👋 Monitoring engine manually stopped. Shutting down gracefully.")
     except Exception as e:
