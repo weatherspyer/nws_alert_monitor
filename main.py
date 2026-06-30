@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import aiohttp
-from aiohttp import web  # Added to satisfy Render's port binding health check
+from aiohttp import web  # Satisfies Render's port binding and provides custom routing
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from src.engine import WeatherStreamEngine
@@ -290,9 +290,15 @@ async def send_slack_alert(alert, location_name):
     except Exception as e:
         print(f"❌ Error dispatching asynchronous event webhook: {e}")
 
-# --- NEW: Added dummy health check handler for Render ---
+# --- aiohttp Server Endpoints ---
+
 async def handle_health_check(request):
+    """Handles the root endpoint to keep Render and cron-jobs.org awake."""
     return web.Response(text="NWS Weather Alert Monitor is running smoothly on Render free tier.")
+
+async def handle_custom_ping(request):
+    """Handles your dedicated endpoint to verify engine activity with a distinct string."""
+    return web.Response(text="Pong! The NWS Stream Engine is fully active.")
 
 async def main():
     print("🚀 Initializing cloud environment structures...")
@@ -313,16 +319,17 @@ async def main():
         print("⚠️ Monitoring matrix is completely empty. Stream engine aborted.")
         return
 
-    # --- UPDATED: Launch the weather engine as a concurrent background task ---
+    # Fire up the weather engine loop as a concurrent, non-blocking background task
     engine = WeatherStreamEngine(places_to_monitor)
     asyncio.create_task(engine.start_loop(send_slack_alert))
     print("🔄 Weather engine started in background event loop.")
 
-    # --- NEW: Set up and bind the lightweight web server to satisfy Render ---
+    # Initialize the web app container and map web pathways
     app = web.Application()
     app.router.add_get('/', handle_health_check)
+    app.router.add_get('/ping', handle_custom_ping)
     
-    # Render maps its dynamic port assignment to 'PORT'. Fall back to 8080 locally.
+    # Render maps its dynamic port allocation to 'PORT' environment variables
     port = int(os.environ.get("PORT", 8080))
     
     runner = web.AppRunner(app)
@@ -332,7 +339,7 @@ async def main():
     print(f"📡 Binding server to port {port} for Render health checks...")
     await site.start()
     
-    # Keep the master loop alive indefinitely
+    # Run indefinitely to preserve the global loop state
     while True:
         await asyncio.sleep(3600)
 
