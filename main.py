@@ -7,12 +7,15 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from src.engine import WeatherStreamEngine
 
-# Load local environment secrets if running on your MacBook Air
+# Load local environment secrets if running on your MacBook
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
+
+# Global reference to track the background loop execution state
+weather_task = None
 
 def parse_nws_time(iso_str):
     """
@@ -297,10 +300,28 @@ async def handle_health_check(request):
     return web.Response(text="NWS Weather Alert Monitor is running smoothly on Render free tier.")
 
 async def handle_custom_ping(request):
-    """Handles your dedicated endpoint to verify engine activity with a distinct string."""
+    """
+    Handles the custom /ping endpoint. Returns a 500 status if the 
+    background weather stream thread task has unexpectedly exited or broken.
+    """
+    global weather_task
+    
+    # Evaluate if the engine loop background process dropped out
+    if weather_task is None or weather_task.done():
+        error_msg = "Engine loop exited unexpectedly without exception diagnostics."
+        if weather_task and weather_task.exception():
+            error_msg = str(weather_task.exception())
+            
+        print(f"🚨 Health Check Failed: Web route reported backend outage. Context: {error_msg}")
+        return web.Response(
+            text=f"CRITICAL: Weather Engine is DOWN. Error: {error_msg}", 
+            status=500
+        )
+        
     return web.Response(text="Pong! The NWS Stream Engine is fully active.")
 
 async def main():
+    global weather_task
     print("🚀 Initializing cloud environment structures...")
     
     config_path = os.path.join("config", "locations.json")
@@ -321,7 +342,7 @@ async def main():
 
     # Fire up the weather engine loop as a concurrent, non-blocking background task
     engine = WeatherStreamEngine(places_to_monitor)
-    asyncio.create_task(engine.start_loop(send_slack_alert))
+    weather_task = asyncio.create_task(engine.start_loop(send_slack_alert))
     print("🔄 Weather engine started in background event loop.")
 
     # Initialize the web app container and map web pathways
