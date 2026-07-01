@@ -301,10 +301,10 @@ async def send_slack_alert(alert, location_name):
             async with session.post(webhook_url, json=payload) as response:
                 if response.status != 200:
                     raise RuntimeError(f"Slack webhook endpoint rejected delivery. HTTP Status: {response.status}")
-                # Added location name directly to your core execution logs
                 print(f"✅ Dispatched [{alert['properties']['event']}] for {location_name} to Slack successfully.")
     except aiohttp.ClientError as e:
         raise RuntimeError(f"Network subsystem connection breakdown when routing to Slack: {e}")
+
 
 # --- Custom LifeCycle Tracking Manager ---
 
@@ -312,7 +312,7 @@ class CustomLifecycleManager:
     """
     Manages coordination between the Engine's native loop and our warm-up states.
     Intercepts the callback engine, silences the very first sweep across monitored entries,
-    and runs the startup dispatch once clear.
+    and runs the startup dispatch once clear. Also runs the background tracking heartbeat.
     """
     def __init__(self, engine):
         self.engine = engine
@@ -320,24 +320,61 @@ class CustomLifecycleManager:
         self.locations_encountered = set()
 
     async def intercept_callback(self, alert, location_name):
-        # Track which locations have poured in alerts so far
         self.locations_encountered.add(location_name)
         
         if self.is_warming_up:
             print(f"🤫 Warmup Mode: Suppressed baseline alert [{alert['properties']['event']}] for {location_name}.")
             return
 
-        # Normal execution mode once warmup window terminates
         await send_slack_alert(alert, location_name)
+
+    async def run_google_script_heartbeat(self):
+        """
+        Runs continuously in the background, firing a fire-and-forget HTTP GET to 
+        Google Apps Script every 60 seconds with current Eastern Time parameters `d` and `t`.
+        """
+        google_url = os.getenv("GOOGLE_WEBHOOK_URL")
+        if not google_url:
+            print("⚠️ WARNING: GOOGLE_WEBHOOK_URL environment variable is not defined. Heartbeat loop skipped.")
+            return
+
+        print("🔁 Google Apps Script fire-and-forget heartbeat service established.")
+        
+        async def fire_request(url, query_params):
+            """Helper to fire the request in the background without waiting for the response."""
+            try:
+                async with aiohttp.ClientSession() as session:
+                    # We fire the request but do not wait to read or process the response body
+                    await session.get(url, params=query_params, timeout=10)
+            except Exception as e:
+                # Caught here so it doesn't disrupt the parent 60-second loop
+                print(f"⚠️ Non-fatal network exception when throwing heartbeat to Google Apps Script: {e}")
+
+        while True:
+            # Capture current system time relative to Eastern Time zone
+            eastern_now = datetime.now(ZoneInfo("America/New_York"))
+            date_param = eastern_now.strftime("%m%d%Y")  # mmddyyyy
+            time_param = eastern_now.strftime("%H%M%S")  # hhmmss (24h format)
+            
+            params = {"d": date_param, "t": time_param}
+            
+            # Spawn the request as an independent background task so we don't await the result
+            asyncio.create_task(fire_request(google_url, params))
+            print(f"📡 Heartbeat sent to Google Apps Script (Response ignored). Parameters: d={date_param}, t={time_param}")
+            
+            # Keep execution tethered strictly to a 60 second delay step
+            await asyncio.sleep(60)
 
     async def execute_engine_loop(self):
         print("🤫 Commencing internal engine tracking initialization...")
+        
+        # Spawn the Google Apps Script minute-by-minute fire-and-forget heartbeat loop
+        asyncio.create_task(self.run_google_script_heartbeat())
         
         # We start the engine task in the background
         engine_task = asyncio.create_task(self.engine.start_loop(self.intercept_callback))
         
         # Wait a brief moment (20 seconds) for the engine to complete its very first sweep
-        # across all locations (since your engine sleeps 15 seconds after finishing a full sweep)
         await asyncio.sleep(20)
         
         # Turn off warm-up blocking mode
