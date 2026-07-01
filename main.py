@@ -272,6 +272,20 @@ def format_slack_block_kit(alert, location_name):
     }
     return payload
 
+async def send_slack_notification(text_message):
+    """
+    Dispatches a simple standalone text notification string to Slack.
+    Used for lifecycle milestones like successful code startup signals.
+    """
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(webhook_url, json={"text": text_message})
+    except Exception as e:
+        print(f"⚠️ Non-fatal failure sending operational text notification: {e}")
+
 async def send_slack_alert(alert, location_name):
     """
     Dispatches the formatted block kit payload directly to the Slack Webhook channel.
@@ -293,6 +307,42 @@ async def send_slack_alert(alert, location_name):
     except aiohttp.ClientError as e:
         raise RuntimeError(f"Network subsystem connection breakdown when routing to Slack: {e}")
 
+# --- Custom Wrapper to implement Silent Warmups ---
+
+class CustomEngineRunner:
+    """
+    Wraps the core weather engine loop to enable a silent 'warmup phase' 
+    on startup, blocking notifications for pre-existing hazards.
+    """
+    def __init__(self, engine):
+        self.engine = engine
+        self.is_warm_up = True
+
+    async def alert_router(self, alert, location_name):
+        # Drop notifications silently on the floor if the engine is building its initial memory map
+        if self.is_warm_up:
+            print(f"🤫 Warmup Mode: Suppressed pre-existing alert [{alert['properties']['event']}] for {location_name}.")
+            return
+            
+        # Normal execution mode once warmup has wrapped up
+        await send_slack_alert(alert, location_name)
+
+    async def execute(self):
+        print("🤫 Commencing engine warmup pass to absorb pre-existing alerts...")
+        
+        # Phase 1: Trigger the loop once with warmup flag enabled to safely populate internal cache
+        await self.engine.scan_all_locations(self.alert_router)
+        
+        # Phase 2: Warmup baseline set successfully. Notify Slack channel that tracking is live
+        self.is_warm_up = False
+        print("🚀 Warmup sequence complete. Core streaming engine transitions to LIVE status.")
+        await send_slack_notification("🚀 *NWS Alert Monitor initialization successful. Stream engine is live.*")
+        
+        # Phase 3: Transition smoothly into standard, ongoing loop mode
+        while True:
+            await asyncio.sleep(60)
+            await self.engine.scan_all_locations(self.alert_router)
+
 # --- aiohttp Server Endpoints ---
 
 async def handle_health_check(request):
@@ -306,7 +356,6 @@ async def handle_custom_ping(request):
     """
     global weather_task
     
-    # Evaluate if the engine loop background process dropped out
     if weather_task is None or weather_task.done():
         error_msg = "Engine loop exited unexpectedly without exception diagnostics."
         if weather_task and weather_task.exception():
@@ -344,10 +393,13 @@ async def main():
         print("⚠️ Monitoring matrix is completely empty. Stream engine aborted.")
         return
 
-    # Fire up the weather engine loop as a concurrent, non-blocking background task
-    engine = WeatherStreamEngine(places_to_monitor)
-    weather_task = asyncio.create_task(engine.start_loop(send_slack_alert))
-    print("🔄 Weather engine started in background event loop.")
+    # Instantiate the core engine object and pass it to our custom lifecycle runner
+    base_engine = WeatherStreamEngine(places_to_monitor)
+    runner_instance = CustomEngineRunner(base_engine)
+    
+    # Run the wrapper logic safely within a background task worker thread
+    weather_task = asyncio.create_task(runner_instance.execute())
+    print("🔄 Weather engine runner task started in background event loop.")
 
     # Initialize the web app container and map web pathways
     app = web.Application()
