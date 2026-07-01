@@ -21,7 +21,7 @@ def parse_nws_time(iso_str):
     """
     Parses an ISO-8601 timestamp string from the NWS API, converts it
     explicitly to Eastern Time (America/New_York), and formats it into 
-    'M/D/YYYY I:M p' (e.g., '7/3/2026 11:00PM').
+    'M/D/YYYY I:M p' (e.g., '7/1/2026 11:00AM').
     """
     if not iso_str:
         return "N/A"
@@ -104,7 +104,7 @@ def generate_iem_image_link(alert):
 def generate_iem_text_link(alert):
     """
     Parses parameters from the NWS API to construct an Iowa Environmental Mesonet
-    AFOS text product image link (e.g., .../wx/afos/202606301637_NPWPBZ.png).
+    AFOS text product image link (e.g., .../wx/afos/202607011637_NPWPBZ.png).
     """
     properties = alert.get("properties", {})
     parameters = properties.get("parameters", {})
@@ -275,23 +275,23 @@ def format_slack_block_kit(alert, location_name):
 async def send_slack_alert(alert, location_name):
     """
     Dispatches the formatted block kit payload directly to the Slack Webhook channel.
+    Raises unhandled errors intentionally if configuration issues or connection breaks occur
+    to allow proper fail-safe alerting via monitoring loops.
     """
     webhook_url = os.getenv("SLACK_WEBHOOK_URL")
     if not webhook_url:
-        print("❌ Critical Deployment Error: SLACK_WEBHOOK_URL is missing!")
-        return
+        raise ValueError("CRITICAL: SLACK_WEBHOOK_URL environment variable is entirely missing or invalid.")
 
     payload = format_slack_block_kit(alert, location_name)
     
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(webhook_url, json=payload) as response:
-                if response.status == 200:
-                    print(f"✅ Dispatched [{alert['properties']['event']}] payload node to Slack successfully.")
-                else:
-                    print(f"⚠️ Slack incoming webhook server rejected payload data. Status: {response.status}")
-    except Exception as e:
-        print(f"❌ Error dispatching asynchronous event webhook: {e}")
+                if response.status != 200:
+                    raise RuntimeError(f"Slack webhook endpoint rejected delivery. HTTP Status: {response.status}")
+                print(f"✅ Dispatched [{alert['properties']['event']}] payload node to Slack successfully.")
+    except aiohttp.ClientError as e:
+        raise RuntimeError(f"Network subsystem connection breakdown when routing to Slack: {e}")
 
 # --- aiohttp Server Endpoints ---
 
@@ -324,6 +324,10 @@ async def main():
     global weather_task
     print("🚀 Initializing cloud environment structures...")
     
+    # Pre-flight guardrail: catch missing webhook tokens immediately during startup sequence
+    if not os.getenv("SLACK_WEBHOOK_URL"):
+        raise EnvironmentError("CRITICAL STARTUP FAILURE: SLACK_WEBHOOK_URL is missing from execution environment.")
+
     config_path = os.path.join("config", "locations.json")
     try:
         with open(config_path, "r") as f:
