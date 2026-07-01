@@ -301,7 +301,8 @@ async def send_slack_alert(alert, location_name):
             async with session.post(webhook_url, json=payload) as response:
                 if response.status != 200:
                     raise RuntimeError(f"Slack webhook endpoint rejected delivery. HTTP Status: {response.status}")
-                print(f"✅ Dispatched [{alert['properties']['event']}] payload node to Slack successfully.")
+                # Added location name directly to your core execution logs
+                print(f"✅ Dispatched [{alert['properties']['event']}] for {location_name} to Slack successfully.")
     except aiohttp.ClientError as e:
         raise RuntimeError(f"Network subsystem connection breakdown when routing to Slack: {e}")
 
@@ -342,7 +343,12 @@ class CustomLifecycleManager:
         # Turn off warm-up blocking mode
         self.is_warming_up = False
         print("🚀 Warmup sequence complete. Core streaming engine transitions to LIVE status.")
-        await send_slack_notification("🚀 *NWS Alert Monitor initialization successful. Stream engine is live.*")
+        
+        # Capture current system execution timestamp in Eastern Time (military format)
+        eastern_now = datetime.now(ZoneInfo("America/New_York"))
+        timestamp_str = eastern_now.strftime("%m/%d/%y %H:%M:%S")
+        
+        await send_slack_notification(f"<@weatherspyer> [{timestamp_str}] 🚀 *NWS Alert Monitor initialization successful. Stream engine is live.*")
         
         # Keep our lifecycle context manager linked to the engine background worker thread
         await engine_task
